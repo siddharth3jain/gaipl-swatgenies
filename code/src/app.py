@@ -1,8 +1,36 @@
 import gradio as gr
-import networkx as nx
-from controller import llm_response, create_master_data
+import pandas as pd
+from controller import llm_response, create_master_data, unique_incident_ids, unique_application_ids
 import plotly.express as px
 
+
+# Predefined lists for Search by ID and Search by Application
+search_by_id_options = ["Select an ID"] + unique_incident_ids
+search_by_application_options = ["Select an Application"] + unique_application_ids
+
+
+def update_input(search_mode):
+    """Show the appropriate input field based on search mode and reset previous input values"""
+    if search_mode == "Search by ID":
+        return (
+            gr.update(visible=True, choices=search_by_id_options, value=None),  # Reset dropdown
+            gr.update(visible=False, value="")  # Hide textbox & reset it
+        )
+    elif search_mode == "Search by Application":
+        return (
+            gr.update(visible=True, choices=search_by_application_options, value=None),  # Reset dropdown
+            gr.update(visible=False, value="")  # Hide textbox & reset it
+        )
+    elif search_mode == "Search by Description":
+        return (
+            gr.update(visible=False, value=None),  # Hide dropdown & reset it
+            gr.update(visible=True, value="")  # Show textbox & reset it
+        )
+    else:
+        return (
+            gr.update(visible=False, value=None),  # Hide dropdown & reset
+            gr.update(visible=False, value="")  # Hide textbox & reset
+        )
 
 def generate_chart(df):
     # Convert DataFrame to long format
@@ -19,16 +47,22 @@ def generate_chart(df):
 
 
 # Fetch master data
-def generate_gradio_data(input_message:str):
-    print("start")
-    df_incident_display, df_telemetry_display = create_master_data(input_message)
-    print("Finish")
+def generate_gradio_data(dropdown_value, textbox_value, search_mode):
+    if search_mode == "Search by ID" and dropdown_value in ["", "Select an ID"]:
+        return [], None
+    elif search_mode == "Search by Application" and dropdown_value in ["", "Select an Application"]:
+        return [], None
+    elif search_mode == "Search by Description" and textbox_value.strip() == "":
+        return [], None
+
+    input_value = dropdown_value if search_mode in ["Search by ID", "Search by Application"] else textbox_value
+    df_incident_display, df_telemetry_display = create_master_data(input_value, search_mode)
     return df_incident_display, generate_chart(df_telemetry_display)
 
 
 # Function to reset inputs and outputs
 def reset_inputs():
-    return "",gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), [], []
+    return gr.update(value=None, visible=False), gr.update(value="", visible=False), gr.update(value=""), gr.update(visible=False), gr.update(visible=False),gr.update(visible=False), [], []
 
 
 def chatbot_response(user_message, chatbot_history):
@@ -63,7 +97,17 @@ with gr.Blocks() as demo:
                              label=None, interactive=False, show_label=False)
 
         with gr.Column(scale=3):  # Right column for input box and buttons (3/4 of space)
-            text_input = gr.Textbox(label="Enter your text", placeholder="Type here...")
+            with gr.Row():
+                search_mode = gr.Dropdown(
+                    label="Select Search Mode",
+                    choices=["","Search by ID", "Search by Application", "Search by Description"],
+                    value=""
+                )
+                dropdown_input_value = gr.Dropdown(choices=[], label="Select Option", visible=True, interactive=True)
+                text_input_value = gr.Textbox(label="Enter Description", placeholder="Type here...", visible=False,
+                                           interactive=True)
+
+                search_mode.change(update_input, inputs=[search_mode], outputs=[dropdown_input_value,text_input_value])
             with gr.Row():  # Place buttons side by side
                 submit_btn = gr.Button("Submit", size="sm")  # Small size for button
                 clear_btn = gr.Button("Clear", size="sm")  # Small size for button
@@ -71,13 +115,14 @@ with gr.Blocks() as demo:
     # Below the input/output section, create another row for the results
     with gr.Row():
         with gr.Column():  # Left column for tabular result
-            table_output = gr.DataFrame(label="Similar Incidence", visible=False, interactive=True)
+            table_output = gr.DataFrame(label="Similar Incidence", visible=False)
 
         with gr.Column():  # Right column for text result
             with gr.Group(visible=False) as chatbot_section:
                 with gr.Column(elem_id="chatbot-container"):
                     chatbot = gr.Chatbot(label="Chatbot", type='messages')
                     user_input = gr.Textbox(placeholder="Type a message...", label="Chatbot Input")
+            # chart = gr.Plot(label="Telemetry Graph", visible=False, elem_id="custom-chart")
 
     with gr.Row():
         with gr.Column(scale=2):
@@ -86,8 +131,8 @@ with gr.Blocks() as demo:
         with gr.Column(scale=2):
             pass
 
-    # When the button is clicked, process input and display results
-    submit_btn.click(fn=generate_gradio_data, inputs=text_input, outputs=[table_output, chart])
+    submit_btn.click(fn=generate_gradio_data, inputs=[dropdown_input_value,text_input_value,search_mode], outputs=[table_output, chart])
+
     # After processing, show the results
     submit_btn.click(
         fn=lambda: [gr.update(visible=True), gr.update(visible=True), gr.update(visible=True)],
@@ -98,7 +143,7 @@ with gr.Blocks() as demo:
     chatbot_history = gr.State([])  # Initialize empty list for chatbot history
 
     # Clear button functionality
-    clear_btn.click(fn=reset_inputs, inputs=None, outputs=[text_input, table_output, chart, chatbot_section, chatbot, chatbot_history])
+    clear_btn.click(fn=reset_inputs, inputs=None, outputs=[dropdown_input_value,text_input_value,search_mode,table_output, chart, chatbot_section, chatbot, chatbot_history])
 
     # When user submits a message in the chatbot input, show the chatbot and update the history
     user_input.submit(fn=chatbot_response, inputs=[user_input, chatbot_history], outputs=[chatbot, user_input])
